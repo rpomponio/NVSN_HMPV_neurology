@@ -1,7 +1,7 @@
 # Wald-based inference for GLM models
 # Uses robust standard errors via sandwich estimator
 
-tidy.glm.wald <- function(x, conf.int = TRUE, conf.level = 0.95, ...) {
+tidy.glm.wald <- function(x, exponentiate=FALSE, conf.int = TRUE, conf.level = 0.95, ...) {
   # Extract coefficients
   coefs <- coef(x)
   
@@ -20,6 +20,12 @@ tidy.glm.wald <- function(x, conf.int = TRUE, conf.level = 0.95, ...) {
   } else {
     conf.low <- NA
     conf.high <- NA
+  }
+  
+  if (exponentiate) {
+    coefs  <- exp(coefs)
+    conf.low <- exp(conf.low)
+    conf.high <- exp(conf.high)
   }
   
   # Return tidy dataframe

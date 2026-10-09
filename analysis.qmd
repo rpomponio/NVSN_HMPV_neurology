@@ -36,6 +36,7 @@ dat <- fread("Data/Pitt_Anna_HMPV_SEP26.csv", na.strings = "")
 dat[, neuro.status := fcase(
   c_unuerologic == 1, "Neurologic Disease",
   c_unuerologic == 0, "No Neurologic Disease")]
+dat[, neuro.status:=factor(neuro.status, c("No Neurologic Disease", "Neurologic Disease"))]
 ```
 
 ```{r outcome_variables}
@@ -45,6 +46,7 @@ dat[, hmpv.pos := tmpv == 1]
 # Secondary outcome: Illness severity (5-level ordinal)
 # First, create helper variables for O2/respiratory support
 dat[c_finalstatus == 1, c_hospO2 := fcase(
+  c_suppoxy == 1, TRUE, c_blowby==1, TRUE, c_cpap==1, TRUE,
   inptICU == 1, TRUE,
   c_intubated == 1, TRUE,
   inptEcmo == 1, TRUE,
@@ -74,23 +76,27 @@ dat[, severity := factor(
 ```{r covariate_encoding}
 # Site
 dat[, studysite := factor(
-  studysite, 1:7,
-  c("Nashville", "Rochester", "Cincinnati", "Seattle", "Houston",
-    "Kansas City", "Pittsburgh"))]
+  studysite, c(8, 1:6),
+  c("Pittsburgh", "Nashville", "Rochester", "Cincinnati", "Seattle", "Houston",
+    "Kansas City"))]
 
 # Demographics
 dat[, sexch := factor(sexch, 2:1, c("Female", "Male"))]
 dat[, c_race_int := factor(
-  c_race_int, c(1, 2, 4, 3),
-  c("White NH", "Black NH", "Hispanic", "Other NH"))]
+  c_race_int, c(1, 2, 4, 3, 8),
+  c("White NH", "Black NH", "Hispanic", "Other NH", "Unknown"))]
 
 # Insurance (verify levels in data)
 dat[, insurance.cat := factor(
-  scrinsurance, c(1, 2, 3, 0),
-  c("Private", "Public", "Other", "Unknown"))]
+  scrinsurance, c(1, 2, 3, 4, 8),
+  c("Private", "Public", "Both Public/Private", "None", "Unknown"))]
 
-# Season
-dat[, c_ariyear := factor(c_ariyear)]
+# Season - Exclude Pilot year
+dat[, c_ariyear := factor(
+  c_ariyear,
+  c(2:11),
+  c("2016-17", "2017-18", "2018-19", "2019-20", "2020-21", "2021-22",
+    "2022-23", "2023-24", "2024-25", "2025-26"))]
 
 # Comorbidities - explicit TRUE/FALSE/NA encoding
 dat[, respiratory.cond := fcase(
@@ -105,9 +111,10 @@ dat[, immunocomp.cond := fcase(
   c_uoncolimmu == 1, TRUE,
   c_uoncolimmu == 0, FALSE)]
 
+# Prematurity - default assume full term
 dat[, prematurity.cond := fcase(
   c_uprem == 1, TRUE,
-  c_uprem == 0, FALSE)]
+  default=FALSE)]
 ```
 
 ```{r complete_case_restriction}
@@ -195,7 +202,7 @@ tbl.unadj <- tbl_regression(
   fit.unadj,
   tidy_fun = tidy.glm.wald,
   exponentiate = TRUE,
-  include = neuro.status) |>
+  include = neuro.status,   label = desc.labs) |>
   bold_p() |>
   modify_header(estimate = "**OR**")
 
@@ -204,7 +211,8 @@ tbl.adj <- tbl_regression(
   fit.adj,
   label = desc.labs,
   tidy_fun = tidy.glm.wald,
-  exponentiate = TRUE) |>
+  exponentiate = TRUE,
+  show_single_row=c(respiratory.cond, cardiovasc.cond, immunocomp.cond, prematurity.cond)) |>
   bold_p() |>
   modify_header(estimate = "**AOR**") |>
   remove_abbreviation() |>
