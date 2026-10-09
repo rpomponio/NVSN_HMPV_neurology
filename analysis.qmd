@@ -276,7 +276,7 @@ rates.by.site[, lwr := pmax(0, hmpv.rate - 1.96 * se)]
 rates.by.site[, upr := pmin(1, hmpv.rate + 1.96 * se)]
 ```
 
-[@fig-infection-rates shows HMPV positivity rates by study site and
+[@fig-infection-rates shows HMPV positivity rates by coag period, study site and
 neurologic status. Error bars represent 95% confidence intervals.]{.aside}
 
 ```{r}
@@ -329,9 +329,6 @@ fit.severity <- polr(
   data = hmpv.cases,
   Hess = TRUE)
 
-# Test proportional odds assumption
-brant.test <- brant(fit.severity)
-
 tbl.sev.adj <- tbl_regression(
   fit.severity,
   label = desc.labs,
@@ -363,6 +360,13 @@ tbl_merge(
 
 ## Proportional Odds Assumption
 
+The omnibus test (p < 0.001) indicates violation of the proportional odds assumption. 
+
+```{r}
+# Test proportional odds assumption
+brant.test <- brant(fit.severity)
+```
+
 The Brant test evaluates whether the proportional odds assumption holds—that is, whether the effect of each covariate is the same across all severity thresholds. A non-significant p-value (p > 0.05) indicates the assumption is satisfied for that variable.
 
 ```{r}
@@ -382,7 +386,7 @@ knitr::kable(
   row.names = FALSE)
 ```
 
-The omnibus test (p < 0.001) indicates violation of the proportional odds assumption. Key violations include:
+Key violations include:
 
 - **Neurologic status** (p = 0.014): The primary exposure shows non-proportional effects across severity levels
 - **Site effects**: Multiple sites (Kansas City, Houston, Seattle, Nashville) show significant violations
@@ -474,9 +478,10 @@ p2 <- ggplot(sev.dist, aes(x = neuro.status, y = prop, fill = severity)) +
 p2
 ```
 
-# Comparison to Pittsburgh 2024 Findings
+# Comparison to Pittsburgh 2016-21 Findings
 
 **Previous single-site findings (Pittsburgh only):**
+
 - HMPV infection risk: OR = 1.75 (95% CI: 1.19, 2.56)
 - HMPV severity: OR = 4.80 (95% CI: 2.01, 11.47)
 
@@ -505,13 +510,6 @@ knitr::kable(
   digits = 2,
   col.names = c("Outcome", "AOR", "95% CI Lower", "95% CI Upper"))
 ```
-
-The multisite analysis confirms the association between neurologic disease
-and HMPV outcomes. The infection risk OR is
-`r ifelse(infection.or > 1.19 & infection.or < 2.56, "consistent with", ifelse(infection.or < 1.19, "lower than", "higher than"))`
-the Pittsburgh single-site estimate. The severity OR is
-`r ifelse(severity.or > 2.01 & severity.or < 11.47, "consistent with", ifelse(severity.or < 2.01, "lower than", "higher than"))`
-the Pittsburgh estimate.
 
 # Sensitivity Analyses {.appendix}
 
