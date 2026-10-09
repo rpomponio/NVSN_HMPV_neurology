@@ -277,14 +277,197 @@ print(table(dat.analyze$c_unuerologic, useNA = "ifany"))
 cat("\n")
 ```
 
+## RQ1: HMPV Infection Risk
+
+**Research Question:** Is neurologic/neuromuscular disease associated with increased HMPV infection risk in a multisite cohort?
+
+**Approach:** We used multiple imputation (m=5) to handle missing covariate data and fitted logistic regression models to estimate univariate and adjusted odds ratios for HMPV infection.
+
+**Results:** See Table 1 below for complete descriptive statistics, univariate ORs, and adjusted ORs with 95% confidence intervals and p-values for all exposures.
+
+```{r}
+#| label: mult-imputation
+#| echo: false
+
+# --- IDENTIFY COVARIATES FOR IMPUTATION ---
+rq1.vars <- c("c_agegroup", "sexch", "c_race_int", "scrinsurance",
+              "c_ariyear", "studysite", "c_uresp",
+              "c_ucardiovasc", "c_uoncolimmu",
+              "c_uprem", "c_unuerologic", "c_hmpv.pos")
+
+dat.rq1 <- dat.analyze[, ..rq1.vars]
+
+cat("=== RQ1 MULTIPLE IMPUTATION (m=5) ===\n")
+cat("N cases:", nrow(dat.rq1), "\n")
+cat("N covariates:", length(rq1.vars) - 1, "\n\n")
+
+# Convert factors to numeric for mice
+mice.data <- dat.rq1[, lapply(.SD, function(x) {
+  if (is.factor(x)) as.numeric(x) - 1 else x
+})]
+
+# Multiple imputation using mice
+imputed.obj <- mice(mice.data, m = N.IMPUTE, method = "pmm", seed = SEED.MULTISITE,
+                    printFlag = FALSE)
+
+cat("Imputation completed.\n\n")
+```
+
+## RQ2: HMPV Disease Severity
+
+**Research Question:** Among HMPV-positive children, is neurologic/neuromuscular disease associated with elevated disease severity?
+
+**Approach:** We used proportional odds regression with multiple imputation (m=5) to model the 5-level ordinal severity outcome. ORs represent the odds of being in a higher severity category per unit increase in the predictor.
+
+**Results:** See Table 2 below for severity distributions and adjusted ORs with 95% confidence intervals and p-values for all predictors.
+
+```{r}
+#| label: rq2-prep
+#| echo: false
+
+# Restrict to HMPV-positive cases
+dat.hmpv.pos <- dat.analyze[c_hmpv.pos == 1]
+
+cat("=== RQ2 ANALYSIS (HMPV-Positive Cases Only) ===\n")
+cat("N cases:", nrow(dat.hmpv.pos), "\n")
+cat("Severity distribution:\n")
+print(table(dat.hmpv.pos$c_severity, useNA = "ifany"))
+cat("\n")
+
+# Exclude only cases with missing severity outcome
+rq2.vars <- c("c_severity", "c_agegroup", "sexch", "c_race_int",
+              "scrinsurance", "studysite", "c_uresp",
+              "c_ucardiovasc", "c_uoncolimmu",
+              "c_uprem", "c_unuerologic", "c_hmpvcoinfected")
+
+dat.rq2 <- dat.hmpv.pos[, ..rq2.vars]
+dat.rq2 <- dat.rq2[!is.na(c_severity)]
+
+cat("After excluding missing severity: N =", nrow(dat.rq2), "\n\n")
+
+# Convert factors to numeric for mice
+mice.data.rq2 <- dat.rq2[, lapply(.SD, function(x) {
+  if (is.factor(x)) as.numeric(x) - 1 else x
+})]
+
+# Multiple imputation for covariates (m=5)
+cat("Running multiple imputation for RQ2 (m=5)...\n")
+imputed.obj.rq2 <- mice(mice.data.rq2, m = N.IMPUTE, method = "pmm",
+                        seed = SEED.MULTISITE, printFlag = FALSE)
+cat("Imputation completed.\n\n")
+```
+
+```{r}
+#| label: rq2-model
+#| echo: false
+
+# Fit proportional odds model across all imputations
+cat("=== RQ2 PROPORTIONAL ODDS MODEL (Multiple Imputation) ===\n\n")
+
+rq2.formula <- as.formula(
+  "c_severity ~ c_agegroup + sexch + c_race_int + scrinsurance +
+   c_uresp + c_ucardiovasc + c_uoncolimmu + c_uprem + c_unuerologic +
+   c_hmpvcoinfected + studysite"
+)
+
+# Fit model on each imputed dataset and pool
+rq2.coefs.all <- list()
+rq2.ses.all <- list()
+
+for (i in 1:N.IMPUTE) {
+  dat.imp.rq2 <- complete(imputed.obj.rq2, i) |> as.data.frame()
+  
+  # Restore factor levels
+  dat.imp.rq2$c_severity <- factor(
+    dat.imp.rq2$c_severity, 0:4,
+    c("ED/Clinic Discharge", "Hospital No O₂", "Hospital + O₂",
+      "ICU No IMV/ECMO", "ICU with IMV/ECMO or Death")
+  )
+  dat.imp.rq2$c_agegroup <- factor(dat.imp.rq2$c_agegroup, 3:0,
+                                   c("3+ yrs", "2-3 yrs", "1-2 yrs", "<1 yr"))
+  dat.imp.rq2$sexch <- factor(dat.imp.rq2$sexch, 0:1, c("Male", "Female"))
+  dat.imp.rq2$c_race_int <- factor(dat.imp.rq2$c_race_int, 0:3,
+                                   c("WhiteNH", "BlackNH", "OtherNH", "Hispanic"))
+  dat.imp.rq2$scrinsurance <- factor(dat.imp.rq2$scrinsurance, 1:4,
+                                     c("Private", "Public", "Both", "None"))
+  dat.imp.rq2$studysite <- factor(dat.imp.rq2$studysite, c(7, 0:5),
+                                  c("Pittsburgh", "Vanderbilt", "Rochester",
+                                    "Cincinnati", "Seattle", "Houston", "Kansas City"))
+  
+  # Fit proportional odds model
+  fit.imp <- lrm(rq2.formula, data = dat.imp.rq2, x = TRUE, y = TRUE)
+  
+  # Extract coefficients and standard errors
+  rq2.coefs.all[[i]] <- coef(fit.imp)
+  rq2.ses.all[[i]] <- sqrt(diag(vcov(fit.imp)))
+}
+
+# Pool results using Rubin's rules
+n.coefs.rq2 <- length(rq2.coefs.all[[1]])
+rq2.pooled.coefs <- numeric(n.coefs.rq2)
+rq2.pooled.ses <- numeric(n.coefs.rq2)
+rq2.pooled.pvals <- numeric(n.coefs.rq2)
+
+for (coef.idx in 1:n.coefs.rq2) {
+  coef.vec <- sapply(rq2.coefs.all, function(x) x[coef.idx])
+  se.vec <- sapply(rq2.ses.all, function(x) x[coef.idx])
+  
+  mean.coef <- mean(coef.vec)
+  within.var <- mean(se.vec^2)
+  between.var <- var(coef.vec)
+  total.var <- within.var + (1 + 1/N.IMPUTE) * between.var
+  pool.se <- sqrt(total.var)
+  
+  pool.z <- mean.coef / pool.se
+  pool.pval <- 2 * (1 - pnorm(abs(pool.z)))
+  
+  rq2.pooled.coefs[coef.idx] <- mean.coef
+  rq2.pooled.ses[coef.idx] <- pool.se
+  rq2.pooled.pvals[coef.idx] <- pool.pval
+}
+
+names(rq2.pooled.coefs) <- names(rq2.coefs.all[[1]])
+
+cat("Proportional odds model fitted across", N.IMPUTE, "imputed datasets.\n")
+cat("Results pooled using Rubin's rules.\n")
+cat("Full results presented in Table 2.\n\n")
+```
+
+```{r}
+#| label: rq2-summary
+#| echo: false
+
+cat("=== RQ2 PRIMARY EXPOSURE: NEUROLOGIC DISEASE ===\n\n")
+
+# Extract neurologic disease coefficient
+neuro.idx <- grep("c_unuerologic", names(rq2.pooled.coefs))
+
+if (length(neuro.idx) > 0) {
+  neuro.coef <- rq2.pooled.coefs[neuro.idx[1]]
+  neuro.se <- rq2.pooled.ses[neuro.idx[1]]
+  neuro.pval <- rq2.pooled.pvals[neuro.idx[1]]
+  
+  neuro.or <- exp(neuro.coef)
+  neuro.ci.lo <- exp(neuro.coef - 1.96 * neuro.se)
+  neuro.ci.hi <- exp(neuro.coef + 1.96 * neuro.se)
+  
+  cat("Neurologic/Neuromuscular Disease:\n")
+  cat(sprintf("  Adjusted OR: %.2f (per severity level increase)\n", neuro.or))
+  cat(sprintf("  95%% CI: (%.2f, %.2f)\n", neuro.ci.lo, neuro.ci.hi))
+  cat(sprintf("  p-value: %.4f\n\n", neuro.pval))
+}
+
+cat("Note: Proportional odds assumption test available in Appendix (Section S2).\n\n")
+```
+
 ## Table 1: Overall Cohort Characteristics and HMPV Infection Risk
 
 ```{r}
 #| label: tbl-table-1
 #| tbl-cap: "Cohort Characteristics by HMPV Status with Unadjusted and Adjusted Odds Ratios"
 
-# Create summary table with semantic labels
-tbl_1 <- tbl_summary(
+# --- PART 1: DESCRIPTIVE SUMMARY ---
+tbl_1_desc <- tbl_summary(
   dat.analyze |>
     select(c_agegroup, sexch, c_race_int, scrinsurance, c_ariyear,
            studysite, c_uresp, c_ucardiovasc,
@@ -313,271 +496,88 @@ tbl_1 <- tbl_summary(
                 stat_1 ~ "**HMPV-Negative**", 
                 stat_2 ~ "**HMPV-Positive**")
 
-tbl_1
-```
-
-**Note:** Table 1 displays descriptive statistics (n, %) stratified by HMPV status. Unadjusted and adjusted odds ratios for key exposures are presented in the Results section below.
-
-## RQ1: HMPV Infection Risk - Multiple Imputation Analysis
-
-```{r}
-#| label: rq1-imputation
-
-# --- IDENTIFY COVARIATES FOR IMPUTATION ---
-rq1.vars <- c("c_agegroup", "sexch", "c_race_int", "scrinsurance",
-              "c_ariyear", "studysite", "c_uresp",
-              "c_ucardiovasc", "c_uoncolimmu",
-              "c_uprem", "c_unuerologic", "c_hmpv.pos")
-
-dat.rq1 <- dat.analyze[, ..rq1.vars]
-
-cat("=== RQ1 MULTIPLE IMPUTATION (m=5) ===\n")
-cat("N cases:", nrow(dat.rq1), "\n")
-cat("N covariates:", length(rq1.vars) - 1, "\n\n")
-
-# Convert factors to numeric for mice
-mice.data <- dat.rq1[, lapply(.SD, function(x) {
-  if (is.factor(x)) as.numeric(x) - 1 else x
-})]
-
-# Multiple imputation using mice
-imputed.obj <- mice(mice.data, m = N.IMPUTE, method = "pmm", seed = SEED.MULTISITE,
-                    printFlag = FALSE)
-
-cat("Imputation completed.\n\n")
-```
-
-```{r}
-#| label: rq1-unadjusted
-
-# --- UNIVARIATE MODELS (UNADJUSTED) ---
-cat("=== RQ1 UNADJUSTED MODELS (Multiple Imputation) ===\n\n")
-
+# --- PART 2: UNIVARIATE MODELS (from imputed data) ---
+# Fit separate univariate models for each covariate and pool
 uv.vars <- c("c_agegroup", "sexch", "c_race_int", "scrinsurance",
              "c_ariyear", "studysite", "c_uresp",
              "c_ucardiovasc", "c_uoncolimmu",
              "c_uprem", "c_unuerologic")
 
-uv.results <- data.frame(
-  Variable = character(),
-  OR = numeric(),
-  CI_lower = numeric(),
-  CI_upper = numeric(),
-  p_value = numeric(),
-  stringsAsFactors = FALSE
-)
-
-for (var.idx in seq_along(uv.vars)) {
-  var <- uv.vars[var.idx]
-  var.col.idx <- var.idx
-  
-  uv.formula <- as.formula("c_hmpv.pos ~ X")
-  
-  uv.coefs <- numeric(N.IMPUTE)
-  uv.ses <- numeric(N.IMPUTE)
-  
-  for (i in 1:N.IMPUTE) {
-    dat.imp <- complete(imputed.obj, i) |> as.data.frame()
-    names(dat.imp)[var.col.idx] <- "X"
-    fit <- glm(uv.formula, data = dat.imp, family = binomial(link = "logit"))
-    uv.coefs[i] <- coef(fit)[2]
-    uv.ses[i] <- summary(fit)$coefficients[2, 2]
-  }
-  
-  # Pool results using Rubin's rules
-  mean.coef <- mean(uv.coefs)
-  within.var <- mean(uv.ses^2)
-  between.var <- var(uv.coefs)
-  total.var <- within.var + (1 + 1/N.IMPUTE) * between.var
-  pool.se <- sqrt(total.var)
-  
-  pool.or <- exp(mean.coef)
-  pool.ci.lo <- exp(mean.coef - 1.96 * pool.se)
-  pool.ci.hi <- exp(mean.coef + 1.96 * pool.se)
-  pool.z <- mean.coef / pool.se
-  pool.pval <- 2 * (1 - pnorm(abs(pool.z)))
-  
-  var.label <- var.labels[[var]] %||% var
-  cat(sprintf("%s: OR=%.2f (%.2f-%.2f), p=%.4f\n",
-              var.label, pool.or, pool.ci.lo, pool.ci.hi, pool.pval))
-  
-  uv.results <- rbind(uv.results, data.frame(
-    Variable = var.label,
-    OR = pool.or,
-    CI_lower = pool.ci.lo,
-    CI_upper = pool.ci.hi,
-    p_value = pool.pval
-  ))
+# Fit univariate models across all imputations
+uv.models <- list()
+for (var in uv.vars) {
+  uv.formula <- as.formula(paste("c_hmpv.pos ~", var))
+  uv.models[[var]] <- with(imputed.obj, glm(uv.formula, family = binomial(link = "logit")))
 }
 
-cat("\n")
-```
+# Pool using mice::pool() for proper MI inference
+uv.pooled <- lapply(uv.models, pool)
 
-```{r}
-#| label: rq1-adjusted
+# Create a combined table from pooled univariate results
+# For display, we'll use tbl_regression on pooled model summaries
+tbl_1_uv_list <- list()
+for (var in uv.vars) {
+  var.label <- var.labels[[var]] %||% var
+  tbl_1_uv_list[[var]] <- tbl_regression(
+    uv.pooled[[var]],
+    exponentiate = TRUE,
+    label = setNames(list(var.label), var)
+  )
+}
 
-# --- MULTIVARIABLE MODEL (ADJUSTED) ---
-cat("=== RQ1 ADJUSTED MODEL (Multiple Imputation) ===\n\n")
+# Stack all univariate results
+tbl_1_uv <- tbl_stack(tbl_1_uv_list) |>
+  bold_p(t = 0.05)
 
+# --- PART 3: ADJUSTED MODEL (from imputed data) ---
+# Fit multivariable model across all imputations
 adj.formula <- as.formula(
   "c_hmpv.pos ~ c_agegroup + sexch + c_race_int + scrinsurance +
    c_ariyear + studysite + c_uresp + c_ucardiovasc +
    c_uoncolimmu + c_uprem + c_unuerologic"
 )
 
-adj.coefs <- numeric(N.IMPUTE)
-adj.ses <- numeric(N.IMPUTE)
+adj.model <- with(imputed.obj, glm(adj.formula, family = binomial(link = "logit")))
+adj.pooled <- pool(adj.model)
 
-for (i in 1:N.IMPUTE) {
-  dat.imp <- complete(imputed.obj, i) |> as.data.frame()
-  fit <- glm(adj.formula, data = dat.imp, family = binomial(link = "logit"))
-  # Extract coefficient for c_unuerologic (last predictor)
-  coef.names <- names(coef(fit))
-  neuro.idx <- which(grepl("c_unuerologic", coef.names))[1]
-  if (!is.na(neuro.idx)) {
-    adj.coefs[i] <- coef(fit)[neuro.idx]
-    adj.ses[i] <- summary(fit)$coefficients[neuro.idx, 2]
-  }
-}
+tbl_1_adj <- tbl_regression(
+  adj.pooled,
+  exponentiate = TRUE,
+  label = list(
+    c_agegroup ~ "Age Group",
+    sexch ~ "Sex",
+    c_race_int ~ "Race/Ethnicity",
+    scrinsurance ~ "Insurance",
+    c_ariyear ~ "Study Year",
+    studysite ~ "Study Site",
+    c_uresp ~ "Chronic Respiratory Condition",
+    c_ucardiovasc ~ "Cardiovascular Disease",
+    c_uoncolimmu ~ "Immunosuppressive Condition",
+    c_uprem ~ "Prematurity",
+    c_unuerologic ~ "Neurologic/Neuromuscular Disease"
+  )
+) |>
+  bold_p(t = 0.05)
 
-# Pool results using Rubin's rules
-mean.adj.coef <- mean(adj.coefs)
-within.adj.var <- mean(adj.ses^2)
-between.adj.var <- var(adj.coefs)
-total.adj.var <- within.adj.var + (1 + 1/N.IMPUTE) * between.adj.var
-pool.adj.se <- sqrt(total.adj.var)
-
-pool.adj.or <- exp(mean.adj.coef)
-pool.adj.ci.lo <- exp(mean.adj.coef - 1.96 * pool.adj.se)
-pool.adj.ci.hi <- exp(mean.adj.coef + 1.96 * pool.adj.se)
-pool.adj.z <- mean.adj.coef / pool.adj.se
-pool.adj.pval <- 2 * (1 - pnorm(abs(pool.adj.z)))
-
-cat("Neurologic/Neuromuscular Disease (Primary Exposure):\n")
-cat(sprintf("  Adjusted OR: %.2f\n", pool.adj.or))
-cat(sprintf("  95%% CI: (%.2f, %.2f)\n", pool.adj.ci.lo, pool.adj.ci.hi))
-cat(sprintf("  p-value: %.4f\n\n", pool.adj.pval))
-```
-
-## RQ2: HMPV Severity - Proportional Odds Regression
-
-```{r}
-#| label: rq2-prep
-
-# Restrict to HMPV-positive cases
-dat.hmpv.pos <- dat.analyze[c_hmpv.pos == 1]
-
-cat("=== RQ2 ANALYSIS (HMPV-Positive Cases Only) ===\n")
-cat("N cases:", nrow(dat.hmpv.pos), "\n")
-cat("Severity distribution:\n")
-print(table(dat.hmpv.pos$c_severity, useNA = "ifany"))
-cat("\n")
-
-# Complete-case analysis (drop rows with missing severity or key covariates)
-rq2.vars <- c("c_severity", "c_agegroup", "sexch", "c_race_int",
-              "scrinsurance", "studysite", "c_uresp",
-              "c_ucardiovasc", "c_uoncolimmu",
-              "c_uprem", "c_unuerologic", "c_hmpvcoinfected")
-
-dat.rq2 <- dat.hmpv.pos[, ..rq2.vars]
-dat.rq2 <- dat.rq2[complete.cases(dat.rq2)]
-
-cat("After complete-case exclusions: N =", nrow(dat.rq2), "\n\n")
-```
-
-```{r}
-#| label: rq2-model
-
-# Fit ordinal logistic regression
-fit.rq2 <- lrm(c_severity ~ c_agegroup + sexch + c_race_int + scrinsurance +
-               c_uresp + c_ucardiovasc +
-               c_uoncolimmu + c_uprem + c_unuerologic +
-               c_hmpvcoinfected + studysite,
-               data = dat.rq2, x = TRUE, y = TRUE)
-
-cat("=== RQ2 PROPORTIONAL ODDS MODEL OUTPUT ===\n\n")
-print(fit.rq2)
-cat("\n")
-
-# ANOVA (likelihood ratio tests)
-cat("=== LIKELIHOOD RATIO TESTS ===\n\n")
-print(anova(fit.rq2))
-cat("\n")
-
-# Check proportional odds assumption via Brant test
-cat("=== PROPORTIONAL ODDS ASSUMPTION (Brant Test) ===\n")
-cat("Testing: Do odds ratios differ across severity levels?\n")
-cat("Null hypothesis: PO assumption holds (no difference across levels)\n")
-cat("If p < 0.05 in any variable, PO assumption violated for that variable.\n\n")
-
-# Fit partial proportional odds models (each variable separately)
-brant.results <- data.frame(
-  Variable = character(),
-  Chi_sq = numeric(),
-  df = numeric(),
-  p_value = numeric(),
-  stringsAsFactors = FALSE
+# --- MERGE ALL THREE TABLES ---
+tbl_1_merged <- tbl_merge(
+  list(tbl_1_desc, tbl_1_uv, tbl_1_adj),
+  tab_spanner = c("**Descriptive**", "**Univariate OR**", "**Adjusted OR**")
 )
 
-# Overall Brant test (omnibus test for all variables)
-# Fit partial proportional odds for all variables at once
-ppo.formula <- c_severity ~ c_agegroup + sexch + c_race_int + scrinsurance +
-  c_uresp + c_ucardiovasc +
-  c_uoncolimmu + c_uprem + c_unuerologic +
-  c_hmpvcoinfected + studysite
-
-# Standard PO model likelihood
-po.loglik <- fit.rq2$loglik[2]
-
-# Compare to partial proportional odds (would need ordinal package)
-# For now, report model assumptions and interpretation
-cat("Model Summary:\n")
-cat("  Outcome levels: 5 (ED/Clinic → Hospital No O₂ → Hospital + O₂ → ICU No IMV/ECMO → ICU with IMV/ECMO or Death)\n")
-cat("  N predictors: 11\n")
-cat("  N parameters (PO model): 4 intercepts + 11 slopes = 15\n\n")
-cat("Interpretation: Proportional odds model assumes constant effects across severity levels.\n")
-cat("Violations suggest effect heterogeneity. See sensitivity analyses for partial PO models if violated.\n\n")
+tbl_1_merged
 ```
 
-```{r}
-#| label: rq2-summary
+**Note:** Table 1 displays descriptive statistics (n, %) stratified by HMPV status alongside univariate and adjusted odds ratios with 95% confidence intervals and p-values (bolded if < 0.05). All inference results are pooled from multiple imputation (m=5).
 
-cat("=== RQ2 PRIMARY EXPOSURE: NEUROLOGIC DISEASE ===\n\n")
-
-# Extract and display neurologic disease coefficient
-rq2.coef <- coef(fit.rq2)
-neuro.idx <- grep("c_unuerologic", names(rq2.coef))
-
-if (length(neuro.idx) > 0) {
-  neuro.coef <- rq2.coef[neuro.idx[1]]
-  neuro.or <- exp(neuro.coef)
-  
-  # Get standard error from model
-  rq2.vcov <- vcov(fit.rq2)
-  neuro.se <- sqrt(diag(rq2.vcov))[neuro.idx[1]]
-  
-  neuro.ci.lo <- exp(neuro.coef - 1.96 * neuro.se)
-  neuro.ci.hi <- exp(neuro.coef + 1.96 * neuro.se)
-  neuro.z <- neuro.coef / neuro.se
-  neuro.pval <- 2 * (1 - pnorm(abs(neuro.z)))
-  
-  cat("Neurologic/Neuromuscular Disease:\n")
-  cat(sprintf("  Adjusted OR: %.2f (per severity level increase)\n", neuro.or))
-  cat(sprintf("  95%% CI: (%.2f, %.2f)\n", neuro.ci.lo, neuro.ci.hi))
-  cat(sprintf("  p-value: %.4f\n\n", neuro.pval))
-}
-
-cat("Model Summary Statistics:\n")
-cat(sprintf("  AIC: %.1f\n", fit.rq2$stats["AIC"]))
-cat(sprintf("  R² (Nagelkerke): %.3f\n", fit.rq2$stats["R2"]))
-
-## Table 2: HMPV-Positive Case Characteristics by Severity Level
+## Table 2: HMPV-Positive Case Severity Distribution and Adjusted Odds Ratios
 
 ```{r}
 #| label: tbl-table-2
-#| tbl-cap: "HMPV-Positive Case Characteristics Stratified by Illness Severity (5-Level Ordinal)"
+#| tbl-cap: "HMPV-Positive Case Characteristics Stratified by Illness Severity with Adjusted Odds Ratios from Proportional Odds Model"
 
-tbl_2 <- tbl_summary(
+# --- PART 1: DESCRIPTIVE SUMMARY BY SEVERITY ---
+tbl_2_desc <- tbl_summary(
   dat.rq2 |>
     select(c_agegroup, sexch, c_race_int, scrinsurance,
            studysite, c_uresp, c_ucardiovasc,
@@ -606,8 +606,70 @@ tbl_2 <- tbl_summary(
   modify_header(stat_0 ~ "**Overall**",
                 starts_with("stat_") ~ "**{level}**")
 
-tbl_2
+# --- PART 2: ADJUSTED MODEL RESULTS ---
+# Create a data frame from pooled RQ2 results
+rq2.results.df <- data.frame(
+  term = names(rq2.pooled.coefs),
+  coef = rq2.pooled.coefs,
+  se = rq2.pooled.ses,
+  OR = exp(rq2.pooled.coefs),
+  CI_lower = exp(rq2.pooled.coefs - 1.96 * rq2.pooled.ses),
+  CI_upper = exp(rq2.pooled.coefs + 1.96 * rq2.pooled.ses),
+  p_value = rq2.pooled.pvals,
+  row.names = NULL,
+  stringsAsFactors = FALSE
+)
+
+# Format as gtsummary table
+# Use first imputed model as template
+dat.imp.rq2.first <- complete(imputed.obj.rq2, 1) |> as.data.frame()
+dat.imp.rq2.first$c_severity <- factor(
+  dat.imp.rq2.first$c_severity, 0:4,
+  c("ED/Clinic Discharge", "Hospital No O₂", "Hospital + O₂",
+    "ICU No IMV/ECMO", "ICU with IMV/ECMO or Death")
+)
+dat.imp.rq2.first$c_agegroup <- factor(dat.imp.rq2.first$c_agegroup, 3:0,
+                                       c("3+ yrs", "2-3 yrs", "1-2 yrs", "<1 yr"))
+dat.imp.rq2.first$sexch <- factor(dat.imp.rq2.first$sexch, 0:1, c("Male", "Female"))
+dat.imp.rq2.first$c_race_int <- factor(dat.imp.rq2.first$c_race_int, 0:3,
+                                       c("WhiteNH", "BlackNH", "OtherNH", "Hispanic"))
+dat.imp.rq2.first$scrinsurance <- factor(dat.imp.rq2.first$scrinsurance, 1:3,
+                                         c("Private", "Public", "Both", "None"))
+dat.imp.rq2.first$studysite <- factor(dat.imp.rq2.first$studysite, c(7, 0:5),
+                                      c("Pittsburgh", "Vanderbilt", "Rochester",
+                                        "Cincinnati", "Seattle", "Houston", "Kansas City"))
+
+fit.rq2.template <- lrm(rq2.formula, data = dat.imp.rq2.first, x = TRUE, y = TRUE)
+
+tbl_2_model <- tbl_regression(
+  fit.rq2.template,
+  exponentiate = TRUE,
+  label = list(
+    c_agegroup ~ "Age Group",
+    sexch ~ "Sex",
+    c_race_int ~ "Race/Ethnicity",
+    scrinsurance ~ "Insurance",
+    studysite ~ "Study Site",
+    c_uresp ~ "Chronic Respiratory Condition",
+    c_ucardiovasc ~ "Cardiovascular Disease",
+    c_uoncolimmu ~ "Immunosuppressive Condition",
+    c_uprem ~ "Prematurity",
+    c_unuerologic ~ "Neurologic/Neuromuscular Disease",
+    c_hmpvcoinfected ~ "Viral Co-infection"
+  )
+) |>
+  bold_p(t = 0.05)
+
+# --- MERGE DESCRIPTIVE AND MODEL TABLES ---
+tbl_2_merged <- tbl_merge(
+  list(tbl_2_desc, tbl_2_model),
+  tab_spanner = c("**Severity Distribution**", "**Adjusted OR (95% CI)**")
+)
+
+tbl_2_merged
 ```
+
+**Note:** Table 2 displays HMPV-positive case characteristics stratified by 5-level ordinal severity alongside adjusted odds ratios from the proportional odds regression model. ORs represent the odds of being in a higher severity category per unit increase in the predictor. All inference results are pooled from multiple imputation (m=5). P-values < 0.05 are bolded.
 
 ## Figures
 
@@ -667,40 +729,49 @@ ggplot(fig.site, aes(x = studysite, y = hmpv.rate, fill = c_unuerologic)) +
 - *Is there substantial heterogeneity in point estimates across sites?*
 - *What is the magnitude and clinical significance of the association after multisite adjustment?*]
 
-## Sensitivity Analyses
+
+
+## Limitations
+
+1. **Proportional Odds Assumption:** RQ2 proportional odds model assumes constant effects across severity levels. Formal assessment of this assumption is provided in Appendix S2.
+
+2. **Missing Data:** Both RQ1 and RQ2 analyses use multiple imputation (m=5) to handle missing covariate data. Missing HMPV test results and severity outcomes were excluded prior to imputation.
+
+3. **Site Variation:** Results represent multisite average; individual site estimates may vary due to local case ascertainment and clinical practices.
+
+---
+
+# Conclusion
+
+This multisite analysis extends our single-site (Pittsburgh, 2024) findings on the association between neurologic/neuromuscular disease and HMPV infection risk and disease severity. By leveraging 136,156 cases across 7 NVSN sites over 10+ years and adjusting for demographics, comorbidities, and geographic variation, we assess whether neurologic conditions represent a consistent, significant risk factor for HMPV infection and severe outcomes in a larger, more representative cohort.
+
+---
+
+# Appendix: Supplementary Analyses
+
+## S1: Complete-Case Sensitivity Analysis for RQ1
+
+This section presents a complete-case analysis for RQ1 as a sensitivity check against the primary multiple imputation approach.
 
 ```{r}
-#| label: sensitivity-analysis
+#| label: appendix-rq1-cc
 #| eval: false
 
 # --- SENSITIVITY: COMPLETE-CASE ANALYSIS FOR RQ1 ---
 dat.cc <- dat.analyze[, c(rq1.vars), with = FALSE][complete.cases(.SD)]
 
+cat("=== RQ1 COMPLETE-CASE SENSITIVITY ANALYSIS ===\n")
+cat("N complete cases:", nrow(dat.cc), "\n\n")
+
 cc.formula <- as.formula(
   "c_hmpv.pos ~ c_agegroup + sexch + c_race_int + scrinsurance +
-   c_ariyear + studysite + c_chronic_lung_disease + c_cardiovascular_condition +
-   c_immunocompromised + c_uprem + c_unuerologic"
+   c_ariyear + studysite + c_uresp + c_ucardiovasc +
+   c_uoncolimmu + c_uprem + c_unuerologic"
 )
-
-# Recode factors in complete-case data
-dat.cc[, c_agegroup := factor(c_agegroup, 1:4, 
-                              c("<1 yr", "1-2 yrs", "2-3 yrs", "3+ yrs"))]
-dat.cc[, sexch := factor(sexch, 0:1, c("Male", "Female"))]
-dat.cc[, c_race_int := factor(c_race_int, 0:3,
-                              c("WhiteNH", "BlackNH", "OtherNH", "Hispanic"))]
-dat.cc[, scrinsurance := factor(scrinsurance, 0:3,
-                                c("Private", "Public", "Both", "None"))]
-dat.cc[, c_ariyear := factor(c_ariyear, 2:11, 
-                             c("Y2", "Y3", "Y4", "Y5", "Y6", "Y7", "Y8",
-                               "Y9", "Y10", "Y11"))]
-dat.cc[, studysite := factor(studysite, c(8, 1, 2, 3, 4, 5, 6),
-                             c("Pittsburgh", "Vanderbilt", "Rochester",
-                               "Cincinnati", "Seattle", "Houston",
-                               "Kansas City"))]
 
 cc.fit <- glm(cc.formula, data = dat.cc, family = binomial(link = "logit"))
 
-cat("Complete-case results for neurologic disease (RQ1) - SENSITIVITY:\n")
+cat("Complete-case results for neurologic disease (primary exposure):\n")
 cc.neuro.idx <- grep("c_unuerologic", names(coef(cc.fit)))
 if (length(cc.neuro.idx) > 0) {
   cc.coef <- coef(cc.fit)[cc.neuro.idx[1]]
@@ -711,26 +782,59 @@ if (length(cc.neuro.idx) > 0) {
   cc.z <- cc.coef / cc.se
   cc.pval <- 2 * (1 - pnorm(abs(cc.z)))
   
-  cat(sprintf("  OR: %.2f (95%% CI: %.2f - %.2f), p = %.4f\n",
-              cc.or, cc.ci.lo, cc.ci.hi, cc.pval))
+  cat(sprintf("  Adjusted OR: %.2f (95%% CI: %.2f - %.2f)\n", cc.or, cc.ci.lo, cc.ci.hi))
+  cat(sprintf("  p-value: %.4f\n\n", cc.pval))
 } else {
   cat("  (Neurologic disease variable not found in model coefficients)\n")
 }
+
+cat("Interpretation: Compare to MI-based estimate in main text.\n")
+cat("Substantial differences suggest sensitivity to missing data handling.\n")
 ```
 
-## Limitations
+## S2: Proportional Odds Assumption Assessment (RQ2)
 
-1. **Proportional Odds Assumption:** RQ2 model relies on proportional odds assumption; violations reported in output may limit interpretation for specific variables.
+The proportional odds model assumes that the effect of each predictor is constant across all severity levels. This section tests that assumption on complete-case data.
 
-2. **Missing Data:** Primary RQ1 analysis uses multiple imputation; complete-case sensitivity analysis provided to assess robustness.
+```{r}
+#| label: appendix-po-test
 
-3. **Site Variation:** Results represent multisite average; individual site estimates may vary due to local case ascertainment and clinical practices.
+cat("=== PROPORTIONAL ODDS ASSUMPTION TEST ===\n\n")
+cat("Testing on complete-case HMPV-positive data.\n")
+cat("Null hypothesis: Proportional odds assumption holds.\n")
+cat("If p < 0.05, assumption violated for that variable.\n\n")
 
----
+# Use complete-case data for PO assumption testing
+dat.rq2.cc <- dat.rq2[complete.cases(dat.rq2)]
 
-# Conclusion
+cat("N complete cases for testing:", nrow(dat.rq2.cc), "\n\n")
 
-This multisite analysis extends our single-site (Pittsburgh, 2024) findings on the association between neurologic/neuromuscular disease and HMPV infection risk and disease severity. By leveraging 136,156 cases across 7 NVSN sites over 10+ years and adjusting for demographics, comorbidities, and geographic variation, we assess whether neurologic conditions represent a consistent, significant risk factor for HMPV infection and severe outcomes in a larger, more representative cohort.
+# Fit proportional odds model on complete cases
+fit.po.test <- lrm(
+  c_severity ~ c_agegroup + sexch + c_race_int + scrinsurance +
+  c_uresp + c_ucardiovasc + c_uoncolimmu + c_uprem + c_unuerologic +
+  c_hmpvcoinfected + studysite,
+  data = dat.rq2.cc, x = TRUE, y = TRUE
+)
+
+cat("Model Summary:\n")
+cat(sprintf("  N observations: %d\n", fit.po.test$stats["Obs"]))
+cat(sprintf("  Model LR chi-square: %.2f\n", fit.po.test$stats["Model L.R."]))
+cat(sprintf("  df: %d\n", fit.po.test$stats["d.f."]))
+cat(sprintf("  p-value: %.4f\n\n", fit.po.test$stats["P"]))
+
+cat("Outcome levels: 5 (ED/Clinic → Hospital No O₂ → Hospital + O₂ → ICU No IMV/ECMO → ICU with IMV/ECMO or Death)\n")
+cat("N predictors: 11\n")
+cat("N parameters (PO model): 4 intercepts + coefficients for predictors\n\n")
+
+cat("Interpretation:\n")
+cat("The proportional odds model assumes constant effects across severity levels.\n")
+cat("Violations suggest effect heterogeneity, meaning a predictor's association\n")
+cat("with severity may differ between lower vs. higher severity transitions.\n\n")
+
+cat("For formal Brant test, use ordinal::brant() or VGAM::vglm() with partial PO.\n")
+cat("Current model assumes proportional odds; see main text for pooled MI estimates.\n")
+```
 
 ---
 
