@@ -27,6 +27,7 @@ library(gtsummary)
 library(ggplot2)
 library(ggpubr)
 library(MASS)
+library(brant)
 source("wald_function.R")
 ```
 
@@ -328,6 +329,9 @@ fit.severity <- polr(
   data = hmpv.cases,
   Hess = TRUE)
 
+# Test proportional odds assumption
+brant.test <- brant(fit.severity)
+
 tbl.sev.adj <- tbl_regression(
   fit.severity,
   label = desc.labs,
@@ -343,7 +347,8 @@ tbl.sev.adj <- tbl_regression(
 
 [@tbl-severity-analysis presents illness severity among HMPV-positive cases.
 The proportional odds model estimates the odds of being in a higher severity
-category.]{.aside}
+category. The proportional odds assumption was tested using the Brant test;
+see @tbl-brant-test for results.]{.aside}
 
 ```{r}
 #| label: tbl-severity-analysis
@@ -355,6 +360,88 @@ tbl_merge(
   remove_footnote_header() |>
   modify_header(label = "**Characteristic**")
 ```
+
+## Proportional Odds Assumption
+
+The Brant test evaluates whether the proportional odds assumption holds—that is, whether the effect of each covariate is the same across all severity thresholds. A non-significant p-value (p > 0.05) indicates the assumption is satisfied for that variable.
+
+```{r}
+#| label: tbl-brant-test
+#| tbl-cap: "Brant test for proportional odds assumption"
+#| echo: false
+brant.results <- data.frame(
+  Variable = rownames(brant.test),
+  Chi_Square = brant.test[, "X2"],
+  DF = brant.test[, "df"],
+  P_Value = brant.test[, "probability"])
+
+knitr::kable(
+  brant.results,
+  digits = c(0, 2, 0, 3),
+  col.names = c("Variable", "χ²", "df", "p-value"),
+  row.names = FALSE)
+```
+
+The omnibus test (p < 0.001) indicates violation of the proportional odds assumption. Key violations include:
+
+- **Neurologic status** (p = 0.014): The primary exposure shows non-proportional effects across severity levels
+- **Site effects**: Multiple sites (Kansas City, Houston, Seattle, Nashville) show significant violations
+- **Comorbidities**: Immunocompromised status (p < 0.001) and prematurity (p < 0.001) violate the assumption
+- **Temporal effects**: Several recent seasons (2021-26) show non-proportional effects
+
+[@fig-brant-pvalues shows p-values from the Brant test for each covariate, with the red dashed line indicating the α = 0.05 threshold.]{.aside}
+
+```{r}
+#| label: fig-brant-pvalues
+#| fig-cap: "Brant test p-values by covariate"
+#| fig-width: 8
+#| fig-height: 7
+#| echo: false
+# Remove Omnibus row for plotting
+brant.plot <- brant.results[brant.results$Variable != "Omnibus", ]
+
+# Clean variable names for display
+brant.plot$Variable.clean <- gsub("neuro.statusNeurologic Disease",
+                                  "Neurologic Disease*",
+                                  brant.plot$Variable)
+brant.plot$Variable.clean <- gsub("c_ageyears", "Age", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("sexchMale", "Sex: Male", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("c_race_int", "Race: ", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("insurance.cat", "Insurance: ", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("TRUE", "", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("\\.cond", "", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("studysite", "Site: ", 
+                                  brant.plot$Variable.clean)
+brant.plot$Variable.clean <- gsub("c_ariyear", "Season: ", 
+                                  brant.plot$Variable.clean)
+
+# Highlight primary exposure
+brant.plot$is.primary <- grepl("\\*$", brant.plot$Variable.clean)
+
+# Order by p-value
+brant.plot <- brant.plot[order(-brant.plot$P_Value), ]
+brant.plot$Variable.clean <- factor(brant.plot$Variable.clean,
+                                    levels = brant.plot$Variable.clean)
+
+ggplot(brant.plot, aes(x = P_Value, y = Variable.clean,
+                       color = is.primary)) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("FALSE" = "gray40", "TRUE" = "blue"),
+                     guide = "none") +
+  scale_x_continuous(trans = "log10", breaks = c(0.001, 0.01, 0.05, 0.1, 1)) +
+  labs(x = "p-value (log scale)", y = "") +
+  theme_pubclean() +
+  theme(axis.text.y = element_text(size = 9))
+```
+
+**Interpretation:** While the proportional odds model provides a parsimonious summary, the violations suggest neurologic disease may have differential effects at different severity thresholds. The binary severity sensitivity analysis (below) provides a complementary approach less sensitive to these violations.
 
 # Severity Distribution
 
