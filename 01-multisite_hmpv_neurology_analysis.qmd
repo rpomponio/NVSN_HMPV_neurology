@@ -198,13 +198,13 @@ dat.analyze[, c_uoncolimmu := fcase(
 dat.analyze[, c_uoncolimmu := as.numeric(c_uoncolimmu)]
 
 dat.analyze[, c_uprem := fcase(
-  c_uprem == 1, 1, default = 0
-)]
+  c_uprem == 1, 1,
+  c_uprem == 0, 0)]
 dat.analyze[, c_uprem := as.numeric(c_uprem)]
 
 dat.analyze[, c_unuerologic := fcase(
-  c_unuerologic == 1, 1, default = 0
-)]
+  c_unuerologic == 1, 1,
+  c_unuerologic == 0, 0)]
 dat.analyze[, c_unuerologic := as.numeric(c_unuerologic)]
 
 # HMPV binary indicator
@@ -225,22 +225,24 @@ dat.analyze[, c_hmpvcoinfected := fcase(
 # Level 5: ICU with mechanical ventilation/ECMO or death
 
 # Composite oxygen support indicator (any modality)
-dat.analyze[, has.oxygen := as.numeric(
-  c_suppoxy == 1 | c_hfnc == 1 | c_blowby == 1 | c_cpap == 1
-)]
+dat.analyze[, has.oxygen := fcase(
+  c_suppoxy == 1, 1,
+  c_hfnc == 1, 1,
+  c_blowby == 1, 1,
+  c_cpap == 1, 1)]
 
 dat.analyze[, c_severity := fcase(
   # Level 5: Death OR mechanical ventilation OR ECMO
   c_died == 1 | c_intubated == 1 | inptEcmo == 1, 5L,
   
   # Level 4: ICU without mechanical support
-  inptICU == 1 & c_intubated == 0 & inptEcmo == 0 & c_died == 0, 4L,
+  inptICU == 1, 4L,
   
   # Level 3: Hospital with oxygen support (any modality)
   c_finalstatus == 1 & has.oxygen == 1, 3L,
   
   # Level 2: Hospital without oxygen support
-  c_finalstatus == 1 & has.oxygen == 0, 2L,
+  c_finalstatus == 1 & (has.oxygen == 0 | inptICU ==0), 2L,
   
   # Level 1: ED/clinic discharge or outpatient
   c_finalstatus %in% c(2, 3, 5), 1L,
