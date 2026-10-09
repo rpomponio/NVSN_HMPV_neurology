@@ -1,4 +1,4 @@
-# Executive Summary: Multisite Analysis of Neurologic Disease and HMPV
+# Multisite Analysis of Neurologic Disease and HMPV
 
 ## Overview
 
@@ -20,27 +20,33 @@ We propose to expand our single-site (Pittsburgh) analysis to the full multisite
 ## Study Population & Methods
 
 **Inclusion:** All pediatric ARI cases with valid HMPV test results (2016–2026, 7 sites)\
-**Analysis Methods:** - **Infection risk:** Logistic regression with multiple imputation (m=5) for missing covariates - **Severity:** Proportional odds (ordinal logistic) regression - **Adjustment:** Age, sex, race/ethnicity, insurance, respiratory/cardiovascular/immunosuppressive/prematurity conditions, study year, and **site** (new)
+**Analysis Methods:**
+  - **Infection risk:** Logistic regression with multiple imputation (m=5) for missing covariates
+  - **Severity:** Proportional odds (ordinal logistic) regression
+  - **Adjustment:** Age, sex, race/ethnicity, insurance, respiratory/cardiovascular/immunosuppressive/prematurity conditions, study year, and **site** (new)
 
 ## Key Changes from 2024 Pittsburgh Analysis
 
 1.  **Site Adjustment:** All models now include study site to control for geographic variation
-2.  **Missing Data:** Primary analysis uses multiple imputation; complete-case sensitivity check provided
-3.  **Clustering:** GLM approach (simpler than GEE); repeater-level clustering deferred to sensitivity if warranted
+2.  **Missing Data:** Complete-case analysis
+3.  **Clustering:** None, GLM approach assumes independence
 
 ## Expected Deliverables
 
 **Tables:**
 
-  1. Overall cohort characteristics by HMPV status with unadjusted/adjusted ORs
-  2. HMPV-positive case characteristics by severity level with adjusted ORs
+  1. Overall cohort characteristics by HMPV status with unadjusted/adjusted ORs of infection
+  2. HMPV-positive case characteristics by severity level with adjusted ORs of elevated severity
 
 **Figures:**
 
-  1. Illness severity distribution by neurologic status
-  2. HMPV infection rates by neurologic status and site
+  1. HMPV infection rates by neurologic status and site
+  2. Illness severity distribution by neurologic status
 
-**Key Comparisons:** - Do multisite ORs align with single-site findings (1.75× and 4.80×)? - Is there substantial heterogeneity across sites?
+**Key Comparisons:**
+
+  - Do multisite ORs align with single-site findings (1.75× and 4.80×)?
+  - Is there substantial heterogeneity across sites?
 
 ## Sensitivity Analyses
 
@@ -50,7 +56,7 @@ We propose to expand our single-site (Pittsburgh) analysis to the full multisite
 
 ## Timeline & Resources
 
-**Effort:** 1–2 hours (data prep, modeling, tables/figures)\
+**Effort:** 3-4 hours (data prep, modeling, tables/figures)\
 **Deliverable:** Quarto report with embedded R code (similar to mBio analysis)\
 **Estimated completion:** Within 1 week of approval
 
