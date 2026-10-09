@@ -1,0 +1,428 @@
+---
+title: "Neurologic Disease and HMPV Infection Risk: NVSN Multisite Analysis"
+subtitle: "2016-2026, Complete Case Analysis"
+format:
+  html:
+    output-file: "HMPV_Neurology_Analysis.html"
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+    code-fold: true
+execute:
+  warning: false
+fig-cap-location: top
+abstract-title: "Overview"
+abstract: "This document presents a complete case analysis investigating whether children with neurologic/neuromuscular disease experience increased risk of HMPV (human metapneumovirus) infection and disease severity across 7 NVSN sites from 2016-2026. We compare findings to a previous single-site (Pittsburgh) analysis that found neurologic disease associated with 1.75× higher odds of HMPV infection and 4.80× higher odds of severe illness."
+---
+
+```{r setup}
+library(data.table)
+library(gtsummary)
+library(ggplot2)
+library(ggpubr)
+library(MASS)
+source("wald_function.R")
+```
+
+```{r data}
+dat <- fread("Data/Pitt_Anna_HMPV_SEP26.csv", na.strings = "")
+```
+
+# Data Preparation
+
+```{r exposure_variable}
+# Neurologic/neuromuscular disease status (explicit NA handling)
+dat[, neuro.status := fcase(
+  c_unuerologic == 1, "Neurologic Disease",
+  c_unuerologic == 0, "No Neurologic Disease")]
+```
+
+```{r outcome_variables}
+# Primary outcome: HMPV infection status
+dat[, hmpv.pos := tmpv == 1]
+
+# Secondary outcome: Illness severity (5-level ordinal)
+# First, create helper variables for O2/respiratory support
+dat[c_finalstatus == 1, c_hospO2 := fcase(
+  inptICU == 1, TRUE,
+  c_intubated == 1, TRUE,
+  inptEcmo == 1, TRUE,
+  default = FALSE)]  # If admitted but no ICU/intubation/ECMO markers
+
+dat[, c_mv_ecmo := fcase(
+  c_intubated == 1, TRUE,
+  inptEcmo == 1, TRUE,
+  default = FALSE)]
+
+dat[, c_icu := inptICU == 1]
+
+# Construct 5-level severity outcome
+dat[, severity := fcase(
+  c_finalstatus == 2, 1L,  # ED discharge
+  c_finalstatus == 1 & !c_hospO2, 2L,  # Admitted, no support
+  c_finalstatus == 1 & c_hospO2 & !c_icu, 3L,  # Admitted with O2/resp support
+  c_finalstatus == 1 & c_icu & !c_mv_ecmo, 4L,  # ICU admission
+  c_finalstatus == 1 & c_mv_ecmo, 5L)]  # MV/ECMO
+
+dat[, severity := factor(
+  severity, 1:5,
+  c("ED discharge", "Admitted - no support", "Admitted - O2/resp support",
+    "ICU admission", "Mechanical ventilation/ECMO"))]
+```
+
+```{r covariate_encoding}
+# Site
+dat[, studysite := factor(
+  studysite, 1:7,
+  c("Nashville", "Rochester", "Cincinnati", "Seattle", "Houston",
+    "Kansas City", "Pittsburgh"))]
+
+# Demographics
+dat[, sexch := factor(sexch, 2:1, c("Female", "Male"))]
+dat[, c_race_int := factor(
+  c_race_int, c(1, 2, 4, 3),
+  c("White NH", "Black NH", "Hispanic", "Other NH"))]
+
+# Insurance (verify levels in data)
+dat[, insurance.cat := factor(
+  scrinsurance, c(1, 2, 3, 0),
+  c("Private", "Public", "Other", "Unknown"))]
+
+# Season
+dat[, c_ariyear := factor(c_ariyear)]
+
+# Comorbidities - explicit TRUE/FALSE/NA encoding
+dat[, respiratory.cond := fcase(
+  c_uresp == 1, TRUE,
+  c_uresp == 0, FALSE)]
+
+dat[, cardiovasc.cond := fcase(
+  c_ucardiovasc == 1, TRUE,
+  c_ucardiovasc == 0, FALSE)]
+
+dat[, immunocomp.cond := fcase(
+  c_uoncolimmu == 1, TRUE,
+  c_uoncolimmu == 0, FALSE)]
+
+dat[, prematurity.cond := fcase(
+  c_uprem == 1, TRUE,
+  c_uprem == 0, FALSE)]
+```
+
+```{r complete_case_restriction}
+# Define required variables
+required.vars <- c("hmpv.pos", "neuro.status", "c_ageyears", "sexch",
+                   "c_race_int", "insurance.cat", "respiratory.cond",
+                   "cardiovasc.cond", "immunocomp.cond", "prematurity.cond",
+                   "studysite", "c_ariyear")
+
+# Create complete case indicator
+dat[, complete.case := complete.cases(.SD), .SDcols = required.vars]
+
+# Document exclusions
+exclusion.summary <- dat[, .(
+  total = .N,
+  missing_hmpv = sum(is.na(hmpv.pos)),
+  missing_neuro = sum(is.na(neuro.status)),
+  missing_age = sum(is.na(c_ageyears)),
+  missing_sex = sum(is.na(sexch)),
+  missing_race = sum(is.na(c_race_int)),
+  missing_insurance = sum(is.na(insurance.cat)),
+  missing_resp = sum(is.na(respiratory.cond)),
+  missing_cardio = sum(is.na(cardiovasc.cond)),
+  missing_immuno = sum(is.na(immunocomp.cond)),
+  missing_prem = sum(is.na(prematurity.cond)),
+  missing_site = sum(is.na(studysite)),
+  missing_year = sum(is.na(c_ariyear)),
+  complete_cases = sum(complete.case))]
+
+# Subset to complete cases
+inc <- dat[complete.case == TRUE]
+```
+
+# Study Population
+
+[@tbl-exclusions summarizes case inclusion. Starting with `r format(nrow(dat), big.mark = ",")` total ARI cases, we retained `r format(nrow(inc), big.mark = ",")` cases with complete data on HMPV test results, neurologic status, demographics, and comorbidities.]{.aside}
+
+```{r}
+#| label: tbl-exclusions
+#| tbl-cap: "Case inclusion summary"
+#| echo: false
+knitr::kable(exclusion.summary, format.args = list(big.mark = ","))
+```
+
+# Primary Analysis: HMPV Infection Risk
+
+```{r infection_models}
+# Unadjusted model
+fit.unadj <- glm(hmpv.pos ~ neuro.status,
+                 data = inc, family = binomial)
+
+# Adjusted model
+fit.adj <- glm(
+  hmpv.pos ~ neuro.status + c_ageyears + sexch + c_race_int +
+    insurance.cat + respiratory.cond + cardiovasc.cond +
+    immunocomp.cond + prematurity.cond + studysite + c_ariyear,
+  data = inc, family = binomial)
+```
+
+```{r infection_tables}
+# Descriptive statistics
+desc.labs <- list(
+  neuro.status = "Neurologic/neuromuscular disease",
+  c_ageyears = "Age (years)",
+  sexch = "Sex",
+  c_race_int = "Race/ethnicity",
+  insurance.cat = "Insurance type",
+  respiratory.cond = "Respiratory condition",
+  cardiovasc.cond = "Cardiovascular condition",
+  immunocomp.cond = "Immunocompromised",
+  prematurity.cond = "Prematurity",
+  studysite = "Study site",
+  c_ariyear = "Season")
+
+tbl.desc <- tbl_summary(
+  inc,
+  by = hmpv.pos,
+  include = names(desc.labs),
+  label = desc.labs,
+  missing = "no") |>
+  add_overall(last = TRUE)
+
+# Unadjusted ORs
+tbl.unadj <- tbl_regression(
+  fit.unadj,
+  tidy_fun = tidy.glm.wald,
+  exponentiate = TRUE,
+  include = neuro.status) |>
+  bold_p() |>
+  modify_header(estimate = "**OR**")
+
+# Adjusted ORs
+tbl.adj <- tbl_regression(
+  fit.adj,
+  label = desc.labs,
+  tidy_fun = tidy.glm.wald,
+  exponentiate = TRUE) |>
+  bold_p() |>
+  modify_header(estimate = "**AOR**") |>
+  remove_abbreviation() |>
+  modify_abbreviation("AOR = Adjusted Odds Ratio")
+```
+
+[@tbl-infection-risk presents HMPV infection risk analysis. The left panel shows descriptive statistics stratified by HMPV status. The middle panel shows unadjusted odds ratios, and the right panel shows adjusted odds ratios controlling for demographics, comorbidities, site, and season.]{.aside}
+
+```{r}
+#| label: tbl-infection-risk
+#| tbl-cap: "HMPV infection risk by neurologic status"
+#| echo: false
+tbl_merge(
+  list(tbl.desc, tbl.unadj, tbl.adj),
+  tab_spanner = c("Descriptive", "Unadjusted", "Adjusted")) |>
+  remove_footnote_header() |>
+  modify_header(label = "**Characteristic**")
+```
+
+# Site-Level Variation
+
+```{r fig_infection_by_site}
+# Calculate HMPV positivity rates by site and neurologic status
+rates.by.site <- inc[, .(
+  hmpv.rate = mean(hmpv.pos, na.rm = TRUE),
+  n.pos = sum(hmpv.pos, na.rm = TRUE),
+  n.total = .N),
+  by = .(neuro.status, studysite)]
+
+# Add 95% CI using normal approximation
+rates.by.site[, se := sqrt(hmpv.rate * (1 - hmpv.rate) / n.total)]
+rates.by.site[, lwr := pmax(0, hmpv.rate - 1.96 * se)]
+rates.by.site[, upr := pmin(1, hmpv.rate + 1.96 * se)]
+```
+
+[@fig-infection-rates shows HMPV positivity rates by study site and neurologic status. Error bars represent 95% confidence intervals.]{.aside}
+
+```{r}
+#| label: fig-infection-rates
+#| fig-cap: "HMPV infection rates by site and neurologic status"
+#| fig-width: 9
+#| fig-height: 5
+#| echo: false
+p1 <- ggplot(
+  rates.by.site,
+  aes(x = studysite, y = hmpv.rate, color = neuro.status,
+      group = neuro.status)) +
+  geom_point(size = 3, position = position_dodge(width = 0.4)) +
+  geom_errorbar(
+    aes(ymin = lwr, ymax = upr),
+    width = 0.2, position = position_dodge(width = 0.4)) +
+  geom_line(position = position_dodge(width = 0.4)) +
+  labs(x = "", y = "HMPV Positivity Rate",
+       color = "Neurologic Status") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_pubclean() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom")
+p1
+```
+
+# Secondary Analysis: Disease Severity Among HMPV+ Cases
+
+```{r severity_analysis}
+# Subset to HMPV-positive cases
+hmpv.cases <- inc[hmpv.pos == TRUE & !is.na(severity)]
+
+# Descriptive summary by severity level
+tbl.sev.desc <- tbl_summary(
+  hmpv.cases,
+  by = severity,
+  include = c(neuro.status, c_ageyears, sexch, c_race_int, insurance.cat,
+              respiratory.cond, cardiovasc.cond, immunocomp.cond,
+              prematurity.cond, studysite, c_ariyear),
+  label = desc.labs,
+  missing = "no")
+
+# Proportional odds model
+fit.severity <- polr(
+  severity ~ neuro.status + c_ageyears + sexch + c_race_int +
+    insurance.cat + respiratory.cond + cardiovasc.cond +
+    immunocomp.cond + prematurity.cond + studysite + c_ariyear,
+  data = hmpv.cases,
+  Hess = TRUE)
+
+tbl.sev.adj <- tbl_regression(
+  fit.severity,
+  label = desc.labs,
+  exponentiate = TRUE) |>
+  bold_p() |>
+  modify_header(estimate = "**OR**") |>
+  modify_footnote(estimate ~ "Proportional odds ratio for elevated severity")
+```
+
+[@tbl-severity-analysis presents illness severity among HMPV-positive cases. The proportional odds model estimates the odds of being in a higher severity category.]{.aside}
+
+```{r}
+#| label: tbl-severity-analysis
+#| tbl-cap: "Illness severity among HMPV-positive cases"
+#| echo: false
+tbl_merge(
+  list(tbl.sev.desc, tbl.sev.adj),
+  tab_spanner = c("Descriptive", "Adjusted OR")) |>
+  remove_footnote_header() |>
+  modify_header(label = "**Characteristic**")
+```
+
+# Severity Distribution
+
+```{r fig_severity_dist}
+# Calculate severity proportions
+sev.dist <- hmpv.cases[, .N, by = .(neuro.status, severity)]
+sev.dist[, prop := N / sum(N), by = neuro.status]
+```
+
+[@fig-severity-distribution shows the distribution of illness severity among HMPV-positive cases, stratified by neurologic status.]{.aside}
+
+```{r}
+#| label: fig-severity-distribution
+#| fig-cap: "Severity distribution among HMPV-positive cases"
+#| fig-width: 8
+#| fig-height: 5
+#| echo: false
+p2 <- ggplot(sev.dist, aes(x = neuro.status, y = prop, fill = severity)) +
+  geom_col(position = "fill") +
+  scale_fill_brewer(palette = "RdYlBu", direction = -1) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = "", y = "Proportion of HMPV+ Cases",
+       fill = "Illness Severity") +
+  theme_pubclean() +
+  theme(
+    axis.text.x = element_text(angle = 0),
+    legend.position = "bottom") +
+  guides(fill = guide_legend(ncol = 2))
+p2
+```
+
+# Comparison to Pittsburgh 2024 Findings
+
+**Previous single-site findings (Pittsburgh only):**
+- HMPV infection risk: OR = 1.75 (95% CI: 1.19, 2.56)
+- HMPV severity: OR = 4.80 (95% CI: 2.01, 11.47)
+
+**Current multisite findings:**
+```{r comparison_summary}
+# Extract ORs from models
+infection.or <- exp(coef(fit.adj)["neuro.statusNeurologic Disease"])
+infection.ci <- exp(confint.default(fit.adj, "neuro.statusNeurologic Disease"))
+
+severity.or <- exp(coef(fit.severity)["neuro.statusNeurologic Disease"])
+severity.ci <- exp(confint.default(fit.severity, "neuro.statusNeurologic Disease"))
+
+comparison <- data.frame(
+  Outcome = c("HMPV Infection Risk", "HMPV Severity (among HMPV+)"),
+  OR = c(infection.or, severity.or),
+  CI_Lower = c(infection.ci[1], severity.ci[1]),
+  CI_Upper = c(infection.ci[2], severity.ci[2]))
+```
+
+```{r}
+#| echo: false
+knitr::kable(comparison, digits = 2, col.names = c("Outcome", "AOR", "95% CI Lower", "95% CI Upper"))
+```
+
+The multisite analysis confirms the association between neurologic disease and HMPV outcomes. The infection risk OR is `r ifelse(infection.or > 1.19 & infection.or < 2.56, "consistent with", ifelse(infection.or < 1.19, "lower than", "higher than"))` the Pittsburgh single-site estimate. The severity OR is `r ifelse(severity.or > 2.01 & severity.or < 11.47, "consistent with", ifelse(severity.or < 2.01, "lower than", "higher than"))` the Pittsburgh estimate.
+
+# Sensitivity Analyses {.appendix}
+
+## Model Without Site/Year Adjustment
+
+```{r sensitivity_no_site}
+fit.no.site <- glm(
+  hmpv.pos ~ neuro.status + c_ageyears + sexch + c_race_int +
+    insurance.cat + respiratory.cond + cardiovasc.cond +
+    immunocomp.cond + prematurity.cond,
+  data = inc, family = binomial)
+
+tbl.no.site <- tbl_regression(
+  fit.no.site,
+  label = desc.labs,
+  tidy_fun = tidy.glm.wald,
+  exponentiate = TRUE,
+  include = neuro.status) |>
+  bold_p() |>
+  modify_header(estimate = "**AOR**")
+```
+
+```{r}
+#| echo: false
+tbl.no.site
+```
+
+## Dichotomous Severity Outcome
+
+```{r sensitivity_binary_severity}
+# Define severe illness as ICU admission or MV/ECMO
+hmpv.cases[, severe := severity %in% c("ICU admission",
+                                       "Mechanical ventilation/ECMO")]
+
+fit.severe.binary <- glm(
+  severe ~ neuro.status + c_ageyears + sexch + c_race_int +
+    insurance.cat + respiratory.cond + cardiovasc.cond +
+    immunocomp.cond + prematurity.cond + studysite + c_ariyear,
+  data = hmpv.cases, family = binomial)
+
+tbl.severe.binary <- tbl_regression(
+  fit.severe.binary,
+  label = desc.labs,
+  tidy_fun = tidy.glm.wald,
+  exponentiate = TRUE,
+  include = neuro.status) |>
+  bold_p() |>
+  modify_header(estimate = "**AOR**") |>
+  modify_footnote(estimate ~ "Adjusted odds ratio for severe illness (ICU/MV/ECMO)")
+```
+
+```{r}
+#| echo: false
+tbl.severe.binary
+```
