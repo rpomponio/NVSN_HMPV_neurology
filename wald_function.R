@@ -6,7 +6,7 @@ tidy.glm.wald <- function(x, exponentiate=FALSE, conf.int = TRUE, conf.level = 0
   coefs <- coef(x)
   
   # Use standard errors from model (could enhance with sandwich package)
-  se <- sqrt(diag(vcov(x)))
+  se <- sqrt(diag(vcov(x)))[1:length(coefs)]
   
   # Calculate z-statistic and p-value
   z.stat <- coefs / se
