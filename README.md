@@ -20,7 +20,7 @@ We propose to expand our single-site (Pittsburgh) analysis to the full multisite
 ## Study Population & Methods
 
 **Inclusion:** All pediatric ARI cases with valid HMPV test results (2016–2026, 7 sites)\
-**Analysis Methods:** - **Infection risk:** Logistic regression with multiple imputation (m=5) for missing covariates - **Severity:** Proportional odds (ordinal logistic) regression - **Adjustment:** Age, sex, race/ethnicity, insurance, respiratory/cardiovascular/immunosuppressive conditions, study year, and **site** (new)
+**Analysis Methods:** - **Infection risk:** Logistic regression with multiple imputation (m=5) for missing covariates - **Severity:** Proportional odds (ordinal logistic) regression - **Adjustment:** Age, sex, race/ethnicity, insurance, respiratory/cardiovascular/immunosuppressive/prematurity conditions, study year, and **site** (new)
 
 ## Key Changes from 2024 Pittsburgh Analysis
 
@@ -56,4 +56,4 @@ We propose to expand our single-site (Pittsburgh) analysis to the full multisite
 
 ## Approval Status
 
-**Next step:** Upon your approval, we will implement data preparation, fit models, and generate descriptive tables/figures.
+**Next step:** Approved. Now fit models, and generate descriptive tables/figures.
